@@ -1,0 +1,82 @@
+from getpass import getpass
+from netmiko import ConnectHandler
+from netmiko.exceptions import NetMikoTimeoutException, NetMikoAuthenticationException
+import pandas as pd
+
+ipaddresses ={
+    "r1":"192.168.20.10",
+    "r2":"192.168.20.11"
+    }
+
+for router , ip in ipaddresses.items():
+    config_router = input(f'\n--- Do you want to config {router}? (y/n) ---: ').lower().strip()
+    
+    if config_router != 'y':
+        print(f"Skipping {router}....")
+        continue  
+    
+    print(f"Starting configuration for {router}...")
+    
+    user = input(f"Enter username for {router}: ").strip()
+    passwd = getpass(f"Enter SSH password for {router}: ").strip()
+    en_passwd = getpass(f"Enter enable password for {router}: ").strip()
+    
+    all_config_commands = []
+
+    while True: 
+        print(f"\nAdding interface configuration for {router}:")
+        int_name = input("Enter Interface name (e.g., GigabitEthernet0/1 or Loopback10): ")
+        int_ip = input("Enter IP address: ")
+        int_mask = input("Enter Subnet Mask: ")
+        
+        all_config_commands.append(f'interface {int_name}')
+        all_config_commands.append(f'ip address {int_ip} {int_mask}')
+        all_config_commands.append('no shutdown')
+        all_config_commands.append('description Configured via Saif Multi-Int Script')
+        all_config_commands.append('router ospf 1')
+        if int_name.lower().startswith("lo"):
+            all_config_commands.append(f'network {int_ip} 0.0.0.0 area 0')
+            all_config_commands.append(f'passive-interface {int_name}')
+            all_config_commands.append('default-information originate')
+        else:
+            int_wildmask=input("Enter wildmask: ")
+            all_config_commands.append(f'network {int_ip} {int_wildmask} area 0')
+            all_config_commands.append('default-information originate')
+        more = input("\nDo you want to add another interface on THIS router? (y/n): ").lower().strip()
+        if more != 'y':
+            break
+
+    device_params = {
+        "device_type": "cisco_ios",
+        "host": ip,
+        "username": user,
+        "password": passwd,
+        "secret": en_passwd,
+        "global_delay_factor": 2
+    }
+
+    try:
+        print(f"\nConnecting to {router}...")
+        with ConnectHandler(**device_params) as net_connect:
+            net_connect.enable()
+            
+            print(f"Sending all configurations to {router}...")
+            output = net_connect.send_config_set(all_config_commands)
+            print(output)
+            
+            intf_brief = net_connect.send_command("show ip interface brief",use_textfsm=True)
+            bf=pd.DataFrame(intf_brief)
+            bf.to_excel(fr"D:\int br inventory\int br to{router}.xlsx",index=False)
+            ospf_br=net_connect.send_command('show ip ospf int br',use_textfsm=True)
+            df=pd.DataFrame(ospf_br)
+            df.to_excel(r"D:\ospf int\ospf int_report.xlsx", index=False)
+            net_connect.save_config()
+            print(f"Done for {router}!\n" + "*"*30)
+
+    except NetMikoAuthenticationException:
+        print(f'Failed to connect to {router}, please check credintials!')
+
+    except NetMikoTimeoutException:
+        print(f'Failed to connect to {router}, please check reachability!')
+
+print('Thank you')
